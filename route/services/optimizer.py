@@ -46,9 +46,9 @@ def optimize_fuel_stops(route_points, total_distance_miles, route_stations=None)
         raise ValueError('Invalid route distance')
     waypoints = _compute_waypoints(route_points, total_distance_miles)
     corridor = settings.ROUTE_CORRIDOR_MILES
-    safety = settings.SAFETY_BUFFER_MILES
     max_range = settings.VEHICLE_RANGE_MILES
     tank_capacity = settings.TANK_CAPACITY_GALLONS
+    mpg = settings.VEHICLE_MPG
 
     stations = route_stations if route_stations is not None else FUEL_STATIONS
     candidate_stops = []
@@ -62,38 +62,80 @@ def optimize_fuel_stops(route_points, total_distance_miles, route_stations=None)
         # no station near route; return empty stops and zero cost as fallback
         return [], 0.0
 
-    remaining = max_range
-    current_mile = 0.0
-    stops = []
-    while current_mile + remaining < total_distance_miles:
-        window_start = current_mile + max(0, remaining - safety)
-        window_end = min(current_mile + remaining, total_distance_miles)
-        allowed = [s for s in candidate_stops if s['mile'] > current_mile and window_start <= s['mile'] <= window_end]
-        if not allowed:
-            fallback = [s for s in candidate_stops if s['mile'] > current_mile and s['mile'] <= current_mile + remaining]
-            if not fallback:
-                break
-            cheapest = min(fallback, key=lambda s: s['price'])
-        else:
-            cheapest = min(allowed, key=lambda s: s['price'])
+    # Fueling policy (cost-minimizing):
+    # At each stop, if there's a cheaper station within vehicle range ahead, buy just enough to reach it.
+    # Otherwise, fill enough to go as far as possible (up to destination).
+    #
+    # Assumption: vehicle starts with a full tank. We only count purchases made at recommended stops.
+    tank_range_miles = tank_capacity * mpg
+    effective_range = min(float(max_range), float(tank_range_miles))
+    if effective_range <= 0:
+        raise ValueError('Invalid vehicle range configuration')
 
-        if cheapest['mile'] <= current_mile:
+    # Ensure we include stations very near the start, and we always have a destination sentinel.
+    stations_sorted = [s for s in candidate_stops if 0.0 <= s['mile'] <= total_distance_miles]
+    if not stations_sorted:
+        return [], 0.0
+
+    position = 0.0
+    fuel_gallons = float(tank_capacity)
+    stops = []
+
+    idx = 0
+    while position < total_distance_miles and idx < len(stations_sorted):
+        station = stations_sorted[idx]
+        # Need to reach this station from current position using current fuel.
+        dist_to_station = station['mile'] - position
+        if dist_to_station < -1e-6:
+            idx += 1
+            continue
+
+        gallons_needed = max(0.0, dist_to_station / mpg)
+        if gallons_needed - fuel_gallons > 1e-9:
+            # Can't reach this station; plan breaks.
             break
 
-        current_mile = cheapest['mile']
-        remaining = max_range
-        gallons_purchased = tank_capacity
-        stops.append({
-            'station_name': cheapest['name'],
-            'address': cheapest['address'],
-            'city': cheapest['city'],
-            'state': cheapest['state'],
-            'coordinates': [cheapest['lon'], cheapest['lat']],
-            'price_per_gallon': round(cheapest['price'], 5),
-            'miles_from_start': round(current_mile, 1),
-            'gallons_purchased': round(gallons_purchased, 2),
-            'cost_at_stop': round(gallons_purchased * cheapest['price'], 2),
-        })
+        # Drive to station.
+        position = station['mile']
+        fuel_gallons -= gallons_needed
 
-    total_cost = sum(stop['cost_at_stop'] for stop in stops)
+        # Find next cheaper station within range.
+        reachable_miles = position + effective_range
+        next_cheaper_mile = None
+        j = idx + 1
+        while j < len(stations_sorted) and stations_sorted[j]['mile'] <= reachable_miles + 1e-6:
+            if stations_sorted[j]['price'] < station['price']:
+                next_cheaper_mile = stations_sorted[j]['mile']
+                break
+            j += 1
+
+        target_mile = min(total_distance_miles, reachable_miles)
+        if next_cheaper_mile is not None:
+            target_mile = min(target_mile, next_cheaper_mile)
+
+        desired_gallons = max(0.0, (target_mile - position) / mpg)
+        desired_gallons = min(desired_gallons, tank_capacity)
+        purchase = max(0.0, desired_gallons - fuel_gallons)
+
+        if purchase > 1e-9:
+            fuel_gallons += purchase
+            stops.append({
+                'station_name': station['name'],
+                'address': station['address'],
+                'city': station['city'],
+                'state': station['state'],
+                'coordinates': [station['lon'], station['lat']],
+                'price_per_gallon': round(station['price'], 5),
+                'miles_from_start': round(position, 1),
+                'gallons_purchased': round(purchase, 2),
+                'cost_at_stop': round(purchase * station['price'], 2),
+            })
+
+        # If we can reach destination now, finish.
+        if position + fuel_gallons * mpg >= total_distance_miles - 1e-6:
+            break
+
+        idx += 1
+
+    total_cost = sum(float(stop['cost_at_stop']) for stop in stops)
     return stops, round(total_cost, 2)

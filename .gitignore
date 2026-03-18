@@ -25,6 +25,7 @@ venv/
 
 # Local app state
 db.sqlite3
+fuel-prices-for-be-assessment.csv
 
 # Editor/IDE
 .vscode/

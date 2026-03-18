@@ -26,6 +26,17 @@ Production-ready Django API for optimizing fuel stops along US driving routes.
 2. Create an access token from your account.
 3. Add to `.env` as `MAPBOX_TOKEN`.
 
+## Fuel price data (required for good results)
+
+The provided `fuel-prices-for-be-assessment.csv` does not include lat/lon, so the app uses a cached lookup of city/state centroids.
+
+Build the cache once (writes `data/city_centroids.json`):
+
+```bash
+source .venv/bin/activate
+python manage.py build_city_cache
+```
+
 ## Run
 
 ```bash

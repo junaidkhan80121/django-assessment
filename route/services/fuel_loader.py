@@ -1,4 +1,5 @@
 import csv
+import json
 import logging
 from pathlib import Path
 from django.conf import settings
@@ -8,30 +9,42 @@ logger = logging.getLogger(__name__)
 FUEL_STATIONS = []
 FUEL_STATIONS_ALL = []
 
-CITY_COORDINATE_CACHE = {
-    'new york,ny': (-74.0060, 40.7128),
-    'los angeles,ca': (-118.2437, 34.0522),
-    'chicago,il': (-87.6298, 41.8781),
-    'houston,tx': (-95.3698, 29.7604),
-    'philadelphia,pa': (-75.1652, 39.9526),
-    'phoenix,az': (-112.0740, 33.4484),
-    'san antonio,tx': (-98.4936, 29.4241),
-    'san diego,ca': (-117.1611, 32.7157),
-    'dallas,tx': (-96.7970, 32.7767),
-    'san jose,ca': (-121.8863, 37.3382),
-}
+CITY_COORDINATE_CACHE = {}
+
+
+def _city_cache_path() -> Path:
+    return Path(settings.BASE_DIR) / 'data' / 'city_centroids.json'
+
+
+def _load_city_cache():
+    global CITY_COORDINATE_CACHE
+    path = _city_cache_path()
+    if not path.exists():
+        CITY_COORDINATE_CACHE = {}
+        return
+    try:
+        CITY_COORDINATE_CACHE = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        logger.warning('Failed to read %s', path)
+        CITY_COORDINATE_CACHE = {}
 
 
 def _resolve_city_state_centroid(city: str, state: str):
     lookup = f"{city.strip().lower()},{state.strip().lower()}"
     if lookup in CITY_COORDINATE_CACHE:
-        return CITY_COORDINATE_CACHE[lookup]
+        lon, lat = CITY_COORDINATE_CACHE[lookup]
+        return (float(lon), float(lat))
     return None
 
 
 def load_fuel_data():
     global FUEL_STATIONS, FUEL_STATIONS_ALL
-    csv_path = Path(settings.BASE_DIR) / 'data' / 'fuel_prices.csv'
+    _load_city_cache()
+
+    # Prefer the assessment file name, fallback to the repo copy under /data.
+    csv_path = Path(settings.BASE_DIR) / 'fuel-prices-for-be-assessment.csv'
+    if not csv_path.exists():
+        csv_path = Path(settings.BASE_DIR) / 'data' / 'fuel_prices.csv'
     if not csv_path.exists():
         logger.warning('Fuel CSV not found at %s', csv_path)
         FUEL_STATIONS = []
@@ -77,4 +90,10 @@ def load_fuel_data():
 
     FUEL_STATIONS_ALL = raw_rows
     FUEL_STATIONS = list(deduped.values())
-    logger.info('Loaded %d fuel stations', len(FUEL_STATIONS))
+    logger.info(
+        'Loaded %d deduped fuel stations (%d raw rows). City cache entries=%d. CSV=%s',
+        len(FUEL_STATIONS),
+        len(FUEL_STATIONS_ALL),
+        len(CITY_COORDINATE_CACHE),
+        csv_path,
+    )
