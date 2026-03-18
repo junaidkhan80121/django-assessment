@@ -1,5 +1,6 @@
 import httpx
 from django.conf import settings
+from .cache_store import load_json_cache, save_json_cache
 from .geocoding import MapboxUnavailableError
 
 class MapboxRoutingError(Exception):
@@ -12,6 +13,14 @@ def get_route(start_coords, finish_coords):
         raise ValueError('Mapbox token not configured')
     start_lon, start_lat = start_coords
     finish_lon, finish_lat = finish_coords
+    cache_key = (
+        f'{float(start_lon):.6f},{float(start_lat):.6f}'
+        f'->{float(finish_lon):.6f},{float(finish_lat):.6f}'
+    )
+    cache = load_json_cache('route_cache.json')
+    if cache_key in cache:
+        return cache[cache_key]
+
     coords = f'{start_lon},{start_lat};{finish_lon},{finish_lat}'
     endpoint = settings.MAPBOX_DIRECTIONS_URL.format(coords=coords)
     params = {'geometries': 'geojson', 'overview': 'full', 'access_token': token}
@@ -35,8 +44,12 @@ def get_route(start_coords, finish_coords):
     route = data['routes'][0]
     geometry = route.get('geometry', {})
     distance_meters = route.get('distance', 0)
-    return {
+    route_result = {
+        # Persist the full route response so repeated trips can avoid another directions call.
         'distance_miles': float(distance_meters) / 1609.34,
         'duration_seconds': route.get('duration', 0),
         'geometry': geometry,
     }
+    cache[cache_key] = route_result
+    save_json_cache('route_cache.json', cache)
+    return route_result

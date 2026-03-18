@@ -56,10 +56,10 @@ TEMPLATES = [
 WSGI_APPLICATION = 'fuel_route_api.wsgi.application'
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': env.db(
+        'DATABASE_URL',
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+    )
 }
 
 AUTH_PASSWORD_VALIDATORS = []
@@ -89,6 +89,7 @@ VEHICLE_RANGE_MILES = 500
 VEHICLE_MPG = 10
 TANK_CAPACITY_GALLONS = 50
 ROUTE_CORRIDOR_MILES = 5
+ROUTE_WAYPOINT_INTERVAL_MILES = 25
 SAFETY_BUFFER_MILES = 100
 
 SPECTACULAR_SETTINGS = {

@@ -21,6 +21,8 @@ class RouteRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError({'start': ['This field may not be blank.']})
         if not finish:
             raise serializers.ValidationError({'finish': ['This field may not be blank.']})
+        if start.casefold() == finish.casefold():
+            raise serializers.ValidationError({'finish': ['Start and finish cannot be the same location.']})
         return {'start': start, 'finish': finish}
 
 class CoordinateSerializer(serializers.Serializer):
