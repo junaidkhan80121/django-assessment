@@ -7,6 +7,6 @@ gunicorn==23.0.0
 httpx==0.28.1
 pgeocode==0.5.0
 numpy==2.4.3
-psycopg[binary]==3.2.9
+psycopg[binary]==3.2.13
 pytest==9.0.2
 pytest-django==4.12.0
