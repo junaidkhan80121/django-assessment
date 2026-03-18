@@ -166,3 +166,15 @@ def test_route_api_post_mocked(monkeypatch):
     response = client.post('/api/v1/route/', {'start': 'New York, NY', 'finish': 'Los Angeles, CA'}, format='json')
     assert response.status_code == 200
     assert response.data['start']['name'] == 'New York, NY'
+
+
+def test_map_view_shows_same_validation_messages():
+    client = APIClient()
+
+    response = client.get('/api/v1/route/map/?start=Chicago&finish=Denver')
+
+    assert response.status_code == 200
+    content = response.content.decode('utf-8')
+    assert 'Validation failed' in content
+    assert 'start: Start should be a US city and state, e.g. &quot;Chicago, IL&quot;.' in content
+    assert 'finish: Finish should be a US city and state, e.g. &quot;Denver, CO&quot;.' in content

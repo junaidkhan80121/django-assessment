@@ -69,6 +69,7 @@
       border-radius: 8px;
       font-size: 14px;
       display: none;
+      white-space: pre-line;
     }
 
     .message.info {
@@ -174,7 +175,14 @@
     <button id="run">Show Route</button>
   </div>
   {% if map_error %}
-  <div id="status" class="message error">{{ map_error }}</div>
+  <div id="status" class="message error">
+    {{ map_error }}
+    {% if map_error_details %}
+      {% for field, messages in map_error_details.items %}
+        <div>{{ field }}: {{ messages|join:", " }}</div>
+      {% endfor %}
+    {% endif %}
+  </div>
   {% elif route_payload %}
   <div id="status" class="message success">Showing route from {{ route_payload.start.name }} to {{ route_payload.finish.name }}.</div>
   {% else %}
@@ -222,6 +230,48 @@ function setMessage(type, text) {
   const statusEl = document.getElementById('status');
   statusEl.className = `message ${type}`;
   statusEl.textContent = text;
+}
+
+function looksLikeUsLocation(value) {
+  if (!value.includes(',')) {
+    return false;
+  }
+  const parts = value.split(',');
+  const region = (parts.pop() || '').trim();
+  const city = parts.join(',').trim();
+  return Boolean(city) && region.length === 2 && /^[a-z]+$/i.test(region);
+}
+
+function validateRouteInputs(start, finish) {
+  const errors = {};
+
+  if (!start) {
+    errors.start = ['This field may not be blank.'];
+    return errors;
+  }
+  if (!finish) {
+    errors.finish = ['This field may not be blank.'];
+    return errors;
+  }
+  if (start.toLowerCase() === finish.toLowerCase()) {
+    errors.finish = ['Start and finish cannot be the same location.'];
+    return errors;
+  }
+  if (!looksLikeUsLocation(start)) {
+    errors.start = ['Start should be a US city and state, e.g. "Chicago, IL".'];
+  }
+  if (!looksLikeUsLocation(finish)) {
+    errors.finish = ['Finish should be a US city and state, e.g. "Denver, CO".'];
+  }
+
+  return errors;
+}
+
+function formatValidationMessage(errors) {
+  const details = Object.entries(errors)
+    .map(([field, messages]) => `${field}: ${messages.join(', ')}`)
+    .join('\n');
+  return details ? `Validation failed\n${details}` : 'Validation failed';
 }
 
 function updateUrl(start, finish) {
@@ -320,13 +370,28 @@ function getApiErrorMessage(data, fallbackMessage) {
     }
   }
 
+  function syncValidationMessage() {
+    const start = startInput.value.trim();
+    const finish = finishInput.value.trim();
+    const errors = validateRouteInputs(start, finish);
+
+    if (Object.keys(errors).length > 0) {
+      clearRouteLayers();
+      setMessage('error', formatValidationMessage(errors));
+      return false;
+    }
+
+    return true;
+  }
+
   async function renderRoute() {
     const start = startInput.value.trim();
     const finish = finishInput.value.trim();
 
-    if (!start || !finish) {
+    const errors = validateRouteInputs(start, finish);
+    if (Object.keys(errors).length > 0) {
       clearRouteLayers();
-      setMessage('error', 'Both start and finish are required.');
+      setMessage('error', formatValidationMessage(errors));
       return;
     }
 
@@ -618,12 +683,14 @@ function getApiErrorMessage(data, fallbackMessage) {
       } catch (error) {
         setMessage('error', `Unable to render interactive map: ${error?.message || String(error)}`);
       }
-    } else if (startInput.value.trim() && finishInput.value.trim()) {
+    } else if (startInput.value.trim() && finishInput.value.trim() && syncValidationMessage()) {
       await renderRoute();
     }
   });
 
   runBtn.addEventListener('click', renderRoute);
+  startInput.addEventListener('input', syncValidationMessage);
+  finishInput.addEventListener('input', syncValidationMessage);
   startInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       renderRoute();

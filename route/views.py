@@ -20,6 +20,12 @@ from .services.routing import get_route, MapboxUnavailableError as RoutingUnavai
 logger = logging.getLogger(__name__)
 
 
+def _validate_route_request(data):
+    serializer = RouteRequestSerializer(data=data)
+    serializer.is_valid()
+    return serializer
+
+
 def _build_route_response(start, finish):
     start_coords = geocode_place(start)
     finish_coords = geocode_place(finish)
@@ -110,6 +116,7 @@ def map_view(request):
     finish = request.GET.get('finish', '').strip()
     route_payload = None
     map_error = ''
+    map_error_details = {}
 
     if request.method == 'POST':
         if request.content_type and 'application/json' in request.content_type:
@@ -124,16 +131,23 @@ def map_view(request):
             finish = request.POST.get('finish', finish).strip()
 
     if start and finish:
-        try:
-            route_payload = _build_route_response(start, finish)
-        except (MapboxUnavailableError, RoutingUnavailableError) as exc:
-            logger.error('Mapbox unavailable while rendering map page: %s', exc)
-            map_error = str(exc)
-        except ValueError as exc:
-            map_error = str(exc)
-        except Exception:
-            logger.exception('Unexpected error in map view')
-            map_error = 'Internal server error'
+        serializer = _validate_route_request({'start': start, 'finish': finish})
+        if not serializer.is_valid():
+            map_error = 'Validation failed'
+            map_error_details = serializer.errors
+        else:
+            start = serializer.validated_data['start']
+            finish = serializer.validated_data['finish']
+            try:
+                route_payload = _build_route_response(start, finish)
+            except (MapboxUnavailableError, RoutingUnavailableError) as exc:
+                logger.error('Mapbox unavailable while rendering map page: %s', exc)
+                map_error = str(exc)
+            except ValueError as exc:
+                map_error = str(exc)
+            except Exception:
+                logger.exception('Unexpected error in map view')
+                map_error = 'Internal server error'
 
     return render(
         request,
@@ -146,6 +160,7 @@ def map_view(request):
             'route_payload_json': mark_safe(json.dumps(route_payload)) if route_payload else 'null',
             'route_svg': _build_route_svg(route_payload) if route_payload else None,
             'map_error': map_error,
+            'map_error_details': map_error_details,
         },
     )
 
@@ -166,7 +181,7 @@ class RouteAPIView(APIView):
         },
     )
     def post(self, request):
-        serializer = RouteRequestSerializer(data=request.data)
+        serializer = _validate_route_request(request.data)
         if not serializer.is_valid():
             return Response({'error': 'Validation failed', 'details': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
         start = serializer.validated_data['start']
