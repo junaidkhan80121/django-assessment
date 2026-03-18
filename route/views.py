@@ -1,21 +1,28 @@
 import logging
 from decimal import Decimal
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from drf_spectacular.utils import extend_schema
+
 from django.conf import settings
+from django.http import JsonResponse
+from django.shortcuts import render
+from drf_spectacular.utils import extend_schema
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .serializers import RouteRequestSerializer, RouteResponseSerializer
 from .services.geocoding import geocode_place, MapboxUnavailableError
-from .services.routing import get_route, MapboxUnavailableError as RoutingUnavailableError
 from .services.optimizer import optimize_fuel_stops
-from django.shortcuts import render
+from .services.routing import get_route, MapboxUnavailableError as RoutingUnavailableError
 
 logger = logging.getLogger(__name__)
 
+
 def map_view(request):
     return render(request, 'route_map.html', {'mapbox_token': settings.MAPBOX_TOKEN})
+
+
+def health_check(request):
+    return JsonResponse({'status': 'ok'})
 
 class RouteAPIView(APIView):
     @extend_schema(
