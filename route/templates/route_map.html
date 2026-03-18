@@ -4,111 +4,634 @@
   <meta charset="utf-8" />
   <title>Fuel Route Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>body { margin: 0; padding: 0; font-family: Arial, sans-serif; } #map { position: absolute; top: 240px; bottom: 0; width: 100%; } .panel { padding: 12px; background: #fff; border-bottom: 1px solid #ddd; position: fixed; width: 100%; z-index: 1; } .panel label { display: block; margin-top: 8px; } .panel textarea { width: 100%; height: 60px; } .panel button { margin-top: 8px; }</style>
+  <script>document.documentElement.classList.add('js-enabled');</script>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f5f7fb;
+      color: #1f2937;
+      min-height: 100vh;
+    }
+
+    .panel {
+      padding: 16px;
+      background: #ffffff;
+      box-sizing: border-box;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    input {
+      width: 100%;
+      margin-top: 6px;
+      padding: 10px 12px;
+      box-sizing: border-box;
+      border: 1px solid #c7d2e3;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    button {
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 8px;
+      background: #0f766e;
+      color: #ffffff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+    }
+
+    .message {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .message.info {
+      display: block;
+      background: #e0f2fe;
+      color: #075985;
+    }
+
+    .message.success {
+      display: block;
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .message.error {
+      display: block;
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    #map {
+      margin-top: 16px;
+      width: 100%;
+      height: calc(100vh - 320px);
+      min-height: 420px;
+      display: none;
+    }
+
+    .hint {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    .summary {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid #dbe3ef;
+      border-radius: 10px;
+      background: #f8fafc;
+      font-size: 14px;
+    }
+
+    .legend {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 13px;
+      color: #334155;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid #dbe3ef;
+      border-radius: 999px;
+      background: #f8fafc;
+    }
+
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .static-map {
+      margin-top: 12px;
+      border: 1px solid #dbe3ef;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #ffffff;
+      min-height: calc(100vh - 240px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .js-enabled #map {
+      display: block;
+    }
+
+    .js-enabled .static-map {
+      display: none;
+    }
+  </style>
 </head>
 <body>
 <div class="panel">
   <h2>Fuel Route Map</h2>
-  <label>Start <input type="text" id="start" value="New York, NY" /></label>
-  <label>Finish <input type="text" id="finish" value="Los Angeles, CA" /></label>
-  <button id="run">Show Route</button>
-  <div id="error" style="color:red"></div>
+  <div class="controls">
+    <label>
+      Start
+      <input type="text" id="start" value="{{ initial_start|default:'New York, NY'|escape }}" />
+    </label>
+    <label>
+      Finish
+      <input type="text" id="finish" value="{{ initial_finish|default:'Los Angeles, CA'|escape }}" />
+    </label>
+    <button id="run">Show Route</button>
+  </div>
+  {% if map_error %}
+  <div id="status" class="message error">{{ map_error }}</div>
+  {% elif route_payload %}
+  <div id="status" class="message success">Showing route from {{ route_payload.start.name }} to {{ route_payload.finish.name }}.</div>
+  {% else %}
+  <div id="status" class="message info">Add a start and finish, or open this page with query parameters or a POST body to load the route automatically.</div>
+  {% endif %}
+  <div class="hint">Example: `/api/v1/route/map/?start=Chicago,%20IL&finish=Denver,%20CO`</div>
+  {% if route_payload %}
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch" style="background:#047857"></span>Green = Start</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#1d4ed8"></span>Blue = Destination</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#d62828"></span>Red = Fuel Stop</div>
+  </div>
+  <div class="summary">
+    Source: {{ route_payload.start.name }} | Destination: {{ route_payload.finish.name }} | Distance: {{ route_payload.total_distance_miles }} miles | Fuel Cost: ${{ route_payload.total_fuel_cost_usd }} | Stops: {{ route_payload.fuel_stops|length }}
+  </div>
+  {% endif %}
+  {% if route_svg %}
+  <div class="static-map" id="static-map">
+    {{ route_svg }}
+  </div>
+  {% endif %}
 </div>
 <div id="map"></div>
 <script>
 function loadScript(src) {
   return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = () => resolve();
-    s.onerror = (ev) => {
-      const msg = `Failed to load ${src} (${ev?.type || 'error'})`;
-      console.error(msg, ev);
-      reject(new Error(msg));
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = () => resolve();
+    script.onerror = (event) => {
+      reject(new Error(`Failed to load ${src} (${event?.type || 'error'})`));
     };
-    document.head.appendChild(s);
+    document.head.appendChild(script);
   });
 }
 
 function loadStyle(href) {
-  const l = document.createElement('link');
-  l.rel = 'stylesheet';
-  l.href = href;
-  document.head.appendChild(l);
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+function setMessage(type, text) {
+  const statusEl = document.getElementById('status');
+  statusEl.className = `message ${type}`;
+  statusEl.textContent = text;
+}
+
+function updateUrl(start, finish) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('start', start);
+  url.searchParams.set('finish', finish);
+  window.history.replaceState({}, '', url);
+}
+
+function getApiErrorMessage(data, fallbackMessage) {
+  if (!data || typeof data !== 'object') {
+    return fallbackMessage;
+  }
+  if (data.error && typeof data.error === 'string') {
+    return data.error;
+  }
+  if (data.details && typeof data.details === 'object') {
+    const firstKey = Object.keys(data.details)[0];
+    const firstValue = data.details[firstKey];
+    if (Array.isArray(firstValue) && firstValue.length > 0) {
+      return `${firstKey}: ${firstValue[0]}`;
+    }
+  }
+  return fallbackMessage;
 }
 
 (async () => {
+  const startInput = document.getElementById('start');
+  const finishInput = document.getElementById('finish');
+  const runBtn = document.getElementById('run');
+  const routePayload = {{ route_payload_json|safe }};
+  const initialStart = `{{ initial_start|escapejs }}`.trim();
+  const initialFinish = `{{ initial_finish|escapejs }}`.trim();
+  const params = new URLSearchParams(window.location.search);
+  const queryStart = params.get('start');
+  const queryFinish = params.get('finish');
+
+  if (queryStart && !initialStart) {
+    startInput.value = queryStart;
+  }
+  if (queryFinish && !initialFinish) {
+    finishInput.value = queryFinish;
+  }
+
   try {
     loadStyle('https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css');
     await loadScript('https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js');
     if (typeof mapboxgl === 'undefined') {
       throw new Error('Mapbox GL failed to load');
     }
-    console.log('Mapbox GL successfully loaded');
   } catch (err) {
-    console.error('Mapbox loader error caught', err);
-    document.getElementById('error').textContent = 'Mapbox loader error: ' + (err?.message || String(err));
+    setMessage('error', `Mapbox loader error: ${err?.message || String(err)}`);
     return;
   }
 
   const token = '{{ mapbox_token }}';
   if (!token || token.trim() === '') {
-    document.getElementById('error').textContent = 'Mapbox loader error: Missing MAPBOX_TOKEN in environment.';
+    setMessage('error', 'Missing MAPBOX_TOKEN in environment.');
     return;
   }
 
   mapboxgl.accessToken = token;
   let map;
+  let popupMarkers = [];
+
   try {
-    map = new mapboxgl.Map({ container: 'map', style: 'mapbox://styles/mapbox/streets-v12', center: [-95, 37], zoom: 3 });
+    map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [-95, 37],
+      zoom: 3
+    });
   } catch (err) {
-    document.getElementById('error').textContent = 'Mapbox initialization error: ' + (err?.message || String(err));
+    setMessage('error', `Mapbox initialization error: ${err?.message || String(err)}`);
     return;
   }
 
-  const runBtn = document.getElementById('run');
-  runBtn.disabled = true;
-  map.on('load', () => { runBtn.disabled = false; });
+  function clearMarkers() {
+    popupMarkers.forEach((marker) => marker.remove());
+    popupMarkers = [];
+  }
 
   function clearRouteLayers() {
-    if (map.getSource('route')) {
-      if (map.getLayer('route-line')) map.removeLayer('route-line');
-      map.removeSource('route');
+    clearMarkers();
+    if (map.getLayer('stop-markers')) {
+      map.removeLayer('stop-markers');
     }
     if (map.getSource('stop-points')) {
-      if (map.getLayer('stop-markers')) map.removeLayer('stop-markers');
       map.removeSource('stop-points');
+    }
+    if (map.getLayer('route-line')) {
+      map.removeLayer('route-line');
+    }
+    if (map.getSource('route')) {
+      map.removeSource('route');
     }
   }
 
-  document.getElementById('run').addEventListener('click', async () => {
-    const start = document.getElementById('start').value;
-    const finish = document.getElementById('finish').value;
-    document.getElementById('error').textContent = '';
+  async function renderRoute() {
+    const start = startInput.value.trim();
+    const finish = finishInput.value.trim();
+
+    if (!start || !finish) {
+      clearRouteLayers();
+      setMessage('error', 'Both start and finish are required.');
+      return;
+    }
+
+    runBtn.disabled = true;
+    setMessage('info', `Loading route from ${start} to ${finish}...`);
+
     try {
-      const res = await fetch('/api/v1/route/', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
+      const response = await fetch('/api/v1/route/', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({start, finish})
       });
-      const data = await res.json();
-      if (!res.ok) {
-        document.getElementById('error').textContent = data.error || 'API Error';
+
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        throw new Error('Route API returned an invalid response.');
+      }
+
+      if (!response.ok) {
+        clearRouteLayers();
+        setMessage('error', getApiErrorMessage(data, 'Unable to load route.'));
         return;
       }
-      const coords = data.route_geometry.coordinates;
-      clearRouteLayers();
-      map.addSource('route', {type:'geojson', data:{type:'Feature', geometry:{type:'LineString', coordinates: coords}}});
-      map.addLayer({ id:'route-line', type:'line', source:'route', layout:{'line-join':'round','line-cap':'round'}, paint:{'line-color':'#ff7e5f','line-width':4}});
-      if (coords.length >= 2) {
-        const bounds = coords.reduce((b,c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
-        map.fitBounds(bounds, {padding: 30});
+
+      const geometry = data.route_geometry || {};
+      const coordinates = geometry.coordinates || [];
+      if (!Array.isArray(coordinates) || coordinates.length < 2) {
+        clearRouteLayers();
+        setMessage('error', 'Route loaded, but no map geometry was returned.');
+        return;
       }
-      const stopData = { type:'FeatureCollection', features: data.fuel_stops.map((s) => ({ type:'Feature', geometry:{type:'Point', coordinates:s.coordinates}, properties:{title:s.station_name, price:s.price_per_gallon, mile:s.miles_from_start}})) };
-      map.addSource('stop-points', {type:'geojson', data:stopData});
-      map.addLayer({id:'stop-markers', type:'circle', source:'stop-points', paint:{'circle-radius':6,'circle-color':'#d62828'}});
-      data.fuel_stops.forEach((s) => new mapboxgl.Marker({color:'#003f5c'}).setLngLat(s.coordinates).setPopup(new mapboxgl.Popup().setHTML(`<b>${s.station_name}</b><br>${s.address}<br>$${s.price_per_gallon}/gal`)).addTo(map));
+
+      clearRouteLayers();
+      map.addSource('route', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: coordinates
+          }
+        }
+      });
+      map.addLayer({
+        id: 'route-line',
+        type: 'line',
+        source: 'route',
+        layout: {'line-join': 'round', 'line-cap': 'round'},
+        paint: {'line-color': '#ff7e5f', 'line-width': 4}
+      });
+
+      const bounds = coordinates.reduce(
+        (accumulator, coordinate) => accumulator.extend(coordinate),
+        new mapboxgl.LngLatBounds(coordinates[0], coordinates[0])
+      );
+      map.fitBounds(bounds, {padding: 30});
+
+      const fuelStops = Array.isArray(data.fuel_stops) ? data.fuel_stops : [];
+      const startCoordinates = Array.isArray(data.start?.coordinates) ? data.start.coordinates : null;
+      const finishCoordinates = Array.isArray(data.finish?.coordinates) ? data.finish.coordinates : null;
+      map.addSource('stop-points', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: [
+            ...fuelStops.map((stop) => ({
+              type: 'Feature',
+              geometry: {
+                type: 'Point',
+                coordinates: stop.coordinates
+              },
+              properties: {
+                title: stop.station_name,
+                price: stop.price_per_gallon,
+                kind: 'fuel'
+              }
+            })),
+            ...(startCoordinates ? [{
+              type: 'Feature',
+              geometry: {
+                type: 'Point',
+                coordinates: startCoordinates
+              },
+              properties: {
+                title: data.start?.name || 'Start',
+                kind: 'start'
+              }
+            }] : []),
+            ...(finishCoordinates ? [{
+              type: 'Feature',
+              geometry: {
+                type: 'Point',
+                coordinates: finishCoordinates
+              },
+              properties: {
+                title: data.finish?.name || 'Destination',
+                kind: 'finish'
+              }
+            }] : [])
+          ]
+        }
+      });
+      map.addLayer({
+        id: 'stop-markers',
+        type: 'circle',
+        source: 'stop-points',
+        paint: {
+          'circle-radius': 7,
+          'circle-color': [
+            'match',
+            ['get', 'kind'],
+            'start', '#047857',
+            'finish', '#1d4ed8',
+            '#d62828'
+          ]
+        }
+      });
+
+      fuelStops.forEach((stop) => {
+        const marker = new mapboxgl.Marker({color: '#003f5c'})
+          .setLngLat(stop.coordinates)
+          .setPopup(
+            new mapboxgl.Popup().setHTML(
+              `<b>${stop.station_name}</b><br>${stop.address}<br>$${stop.price_per_gallon}/gal`
+            )
+          )
+          .addTo(map);
+        popupMarkers.push(marker);
+      });
+
+      if (startCoordinates) {
+        const startMarker = new mapboxgl.Marker({color: '#047857'})
+          .setLngLat(startCoordinates)
+          .setPopup(new mapboxgl.Popup().setHTML(`<b>Start</b><br>${data.start?.name || 'Origin'}`))
+          .addTo(map);
+        popupMarkers.push(startMarker);
+      }
+
+      if (finishCoordinates) {
+        const finishMarker = new mapboxgl.Marker({color: '#1d4ed8'})
+          .setLngLat(finishCoordinates)
+          .setPopup(new mapboxgl.Popup().setHTML(`<b>Destination</b><br>${data.finish?.name || 'Destination'}`))
+          .addTo(map);
+        popupMarkers.push(finishMarker);
+      }
+
+      updateUrl(start, finish);
+      const staticMap = document.getElementById('static-map');
+      if (staticMap) {
+        staticMap.style.display = 'none';
+      }
+      const distance = data.total_distance_miles ?? 'unknown';
+      const cost = data.total_fuel_cost_usd ?? 'unknown';
+      setMessage(
+        'success',
+        `Showing route from ${start} to ${finish}. Distance: ${distance} miles. Estimated fuel cost: $${cost}. Stops: ${fuelStops.length}.`
+      );
     } catch (err) {
-      document.getElementById('error').textContent = 'Request failed: ' + err.message;
+      clearRouteLayers();
+      setMessage('error', `Request failed: ${err?.message || String(err)}`);
+    } finally {
+      runBtn.disabled = false;
+    }
+  }
+
+  runBtn.disabled = true;
+  map.on('load', async () => {
+    runBtn.disabled = false;
+    if (routePayload && routePayload.route_geometry) {
+      try {
+        const coordinates = routePayload.route_geometry.coordinates || [];
+        if (Array.isArray(coordinates) && coordinates.length >= 2) {
+          clearRouteLayers();
+          map.addSource('route', {
+            type: 'geojson',
+            data: {
+              type: 'Feature',
+              geometry: {
+                type: 'LineString',
+                coordinates: coordinates
+              }
+            }
+          });
+          map.addLayer({
+            id: 'route-line',
+            type: 'line',
+            source: 'route',
+            layout: {'line-join': 'round', 'line-cap': 'round'},
+            paint: {'line-color': '#ff7e5f', 'line-width': 4}
+          });
+
+          const bounds = coordinates.reduce(
+            (accumulator, coordinate) => accumulator.extend(coordinate),
+            new mapboxgl.LngLatBounds(coordinates[0], coordinates[0])
+          );
+          map.fitBounds(bounds, {padding: 30});
+
+          const fuelStops = Array.isArray(routePayload.fuel_stops) ? routePayload.fuel_stops : [];
+          const startCoordinates = Array.isArray(routePayload.start?.coordinates) ? routePayload.start.coordinates : null;
+          const finishCoordinates = Array.isArray(routePayload.finish?.coordinates) ? routePayload.finish.coordinates : null;
+          map.addSource('stop-points', {
+            type: 'geojson',
+            data: {
+              type: 'FeatureCollection',
+              features: [
+                ...fuelStops.map((stop) => ({
+                  type: 'Feature',
+                  geometry: {
+                    type: 'Point',
+                    coordinates: stop.coordinates
+                  },
+                  properties: {
+                    title: stop.station_name,
+                    price: stop.price_per_gallon,
+                    kind: 'fuel'
+                  }
+                })),
+                ...(startCoordinates ? [{
+                  type: 'Feature',
+                  geometry: {
+                    type: 'Point',
+                    coordinates: startCoordinates
+                  },
+                  properties: {
+                    title: routePayload.start?.name || 'Start',
+                    kind: 'start'
+                  }
+                }] : []),
+                ...(finishCoordinates ? [{
+                  type: 'Feature',
+                  geometry: {
+                    type: 'Point',
+                    coordinates: finishCoordinates
+                  },
+                  properties: {
+                    title: routePayload.finish?.name || 'Destination',
+                    kind: 'finish'
+                  }
+                }] : [])
+              ]
+            }
+          });
+          map.addLayer({
+            id: 'stop-markers',
+            type: 'circle',
+            source: 'stop-points',
+            paint: {
+              'circle-radius': 7,
+              'circle-color': [
+                'match',
+                ['get', 'kind'],
+                'start', '#047857',
+                'finish', '#1d4ed8',
+                '#d62828'
+              ]
+            }
+          });
+
+          fuelStops.forEach((stop) => {
+            const marker = new mapboxgl.Marker({color: '#003f5c'})
+              .setLngLat(stop.coordinates)
+              .setPopup(
+                new mapboxgl.Popup().setHTML(
+                  `<b>${stop.station_name}</b><br>${stop.address}<br>$${stop.price_per_gallon}/gal`
+                )
+              )
+              .addTo(map);
+            popupMarkers.push(marker);
+          });
+
+          if (startCoordinates) {
+            const startMarker = new mapboxgl.Marker({color: '#047857'})
+              .setLngLat(startCoordinates)
+              .setPopup(new mapboxgl.Popup().setHTML(`<b>Start</b><br>${routePayload.start?.name || 'Origin'}`))
+              .addTo(map);
+            popupMarkers.push(startMarker);
+          }
+
+          if (finishCoordinates) {
+            const finishMarker = new mapboxgl.Marker({color: '#1d4ed8'})
+              .setLngLat(finishCoordinates)
+              .setPopup(new mapboxgl.Popup().setHTML(`<b>Destination</b><br>${routePayload.finish?.name || 'Destination'}`))
+              .addTo(map);
+            popupMarkers.push(finishMarker);
+          }
+        }
+      } catch (error) {
+        setMessage('error', `Unable to render interactive map: ${error?.message || String(error)}`);
+      }
+    } else if (startInput.value.trim() && finishInput.value.trim()) {
+      await renderRoute();
+    }
+  });
+
+  runBtn.addEventListener('click', renderRoute);
+  startInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      renderRoute();
+    }
+  });
+  finishInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      renderRoute();
     }
   });
 })();
