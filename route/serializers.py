@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+
 class RouteRequestSerializer(serializers.Serializer):
     start = serializers.CharField(
         max_length=200,
@@ -23,6 +24,24 @@ class RouteRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError({'finish': ['This field may not be blank.']})
         if start.casefold() == finish.casefold():
             raise serializers.ValidationError({'finish': ['Start and finish cannot be the same location.']})
+
+        def _looks_like_us_location(value: str) -> bool:
+            # Very lightweight sanity check for "US-looking" locations:
+            # requires a comma and a 2-letter state-like suffix.
+            if ',' not in value:
+                return False
+            city, _, region = value.rpartition(',')
+            region = region.strip()
+            return bool(city.strip()) and len(region) == 2 and region.isalpha()
+
+        errors = {}
+        if not _looks_like_us_location(start):
+            errors['start'] = ['Start should be a US city and state, e.g. "Chicago, IL".']
+        if not _looks_like_us_location(finish):
+            errors['finish'] = ['Finish should be a US city and state, e.g. "Denver, CO".']
+        if errors:
+            raise serializers.ValidationError(errors)
+
         return {'start': start, 'finish': finish}
 
 class CoordinateSerializer(serializers.Serializer):

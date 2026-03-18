@@ -178,9 +178,21 @@ class RouteAPIView(APIView):
             return Response(out.data)
         except (MapboxUnavailableError, RoutingUnavailableError) as exc:
             logger.error('Mapbox unavailable: %s', exc)
-            return Response({'error': 'Mapbox service unreachable', 'details': {'message': [str(exc)]}}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response(
+                {
+                    'error': 'Upstream mapping service temporarily unavailable',
+                    'details': {'message': [str(exc)]},
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         except ValueError as exc:
-            return Response({'error': str(exc), 'details': {}}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    'error': 'Invalid or unsupported route',
+                    'details': {'message': [str(exc)]},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except Exception as exc:
             logger.exception('Unexpected error in route API')
             return Response({'error': 'Internal server error', 'details': {}}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

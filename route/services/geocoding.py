@@ -1,13 +1,17 @@
 from functools import lru_cache
 from urllib.parse import quote
+
 import httpx
 from django.conf import settings
+
 from .cache_store import load_json_cache, save_json_cache
+
 
 class MapboxUnavailableError(Exception):
     pass
 
-@lru_cache(maxsize=256)
+
+@lru_cache(maxsize=512)
 def geocode_place(query: str):
     if not query or not isinstance(query, str):
         raise ValueError(f'Location not found or not in USA: {query}')
@@ -22,7 +26,7 @@ def geocode_place(query: str):
         raise ValueError('Mapbox token not configured')
 
     endpoint = settings.MAPBOX_GEOCODING_URL.format(query=quote(normalized_query))
-    params = {'country': 'us', 'types': 'place,address', 'access_token': token}
+    params = {'country': 'us', 'types': 'place,address', 'access_token': token, 'limit': 1}
     url = endpoint
     try:
         with httpx.Client(timeout=10) as client:
@@ -38,13 +42,25 @@ def geocode_place(query: str):
         raise MapboxUnavailableError('Mapbox geocoding unavailable')
 
     data = resp.json()
-    if not data.get('features'):
+    features = data.get('features') or []
+    if not features:
         raise ValueError(f'Location not found or not in USA: {query}')
 
-    feature = data['features'][0]
+    feature = features[0]
+    # Extra defensive check: ensure country is US if Mapbox returns a country code.
+    context = feature.get('context', [])
+    country_code = None
+    for ctx in context:
+        if ctx.get('id', '').startswith('country'):
+            country_code = (ctx.get('short_code') or '').lower()
+            break
+    if country_code and country_code != 'us':
+        raise ValueError(f'Location not found or not in USA: {query}')
+
     lon, lat = feature['center']
     if not (-130.0 <= lon <= -65.0 and 23.0 <= lat <= 50.0):
         raise ValueError(f'Location not found or not in USA: {query}')
+
     cache[normalized_query] = [lon, lat]
     save_json_cache('geocode_cache.json', cache)
     return lon, lat
