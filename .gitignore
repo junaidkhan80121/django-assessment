@@ -1,0 +1,31 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Secret and credential material
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+*.ovpn
+*.secret
+*.secrets
+*secret*
+*credential*
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local app state
+db.sqlite3
+
+# Editor/IDE
+.vscode/
+.idea/

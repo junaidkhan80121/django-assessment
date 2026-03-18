@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Fuel Route Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>body { margin: 0; padding: 0; font-family: Arial, sans-serif; } #map { position: absolute; top: 240px; bottom: 0; width: 100%; } .panel { padding: 12px; background: #fff; border-bottom: 1px solid #ddd; position: fixed; width: 100%; z-index: 1; } .panel label { display: block; margin-top: 8px; } .panel textarea { width: 100%; height: 60px; } .panel button { margin-top: 8px; }</style>
+</head>
+<body>
+<div class="panel">
+  <h2>Fuel Route Map</h2>
+  <label>Start <input type="text" id="start" value="New York, NY" /></label>
+  <label>Finish <input type="text" id="finish" value="Los Angeles, CA" /></label>
+  <button id="run">Show Route</button>
+  <div id="error" style="color:red"></div>
+</div>
+<div id="map"></div>
+<script>
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = (ev) => {
+      const msg = `Failed to load ${src} (${ev?.type || 'error'})`;
+      console.error(msg, ev);
+      reject(new Error(msg));
+    };
+    document.head.appendChild(s);
+  });
+}
+
+function loadStyle(href) {
+  const l = document.createElement('link');
+  l.rel = 'stylesheet';
+  l.href = href;
+  document.head.appendChild(l);
+}
+
+(async () => {
+  try {
+    loadStyle('https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css');
+    await loadScript('https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js');
+    if (typeof mapboxgl === 'undefined') {
+      throw new Error('Mapbox GL failed to load');
+    }
+    console.log('Mapbox GL successfully loaded');
+  } catch (err) {
+    console.error('Mapbox loader error caught', err);
+    document.getElementById('error').textContent = 'Mapbox loader error: ' + (err?.message || String(err));
+    return;
+  }
+
+  const token = '{{ mapbox_token }}';
+  if (!token || token.trim() === '') {
+    document.getElementById('error').textContent = 'Mapbox loader error: Missing MAPBOX_TOKEN in environment.';
+    return;
+  }
+
+  mapboxgl.accessToken = token;
+  let map;
+  try {
+    map = new mapboxgl.Map({ container: 'map', style: 'mapbox://styles/mapbox/streets-v12', center: [-95, 37], zoom: 3 });
+  } catch (err) {
+    document.getElementById('error').textContent = 'Mapbox initialization error: ' + (err?.message || String(err));
+    return;
+  }
+
+  const runBtn = document.getElementById('run');
+  runBtn.disabled = true;
+  map.on('load', () => { runBtn.disabled = false; });
+
+  function clearRouteLayers() {
+    if (map.getSource('route')) {
+      if (map.getLayer('route-line')) map.removeLayer('route-line');
+      map.removeSource('route');
+    }
+    if (map.getSource('stop-points')) {
+      if (map.getLayer('stop-markers')) map.removeLayer('stop-markers');
+      map.removeSource('stop-points');
+    }
+  }
+
+  document.getElementById('run').addEventListener('click', async () => {
+    const start = document.getElementById('start').value;
+    const finish = document.getElementById('finish').value;
+    document.getElementById('error').textContent = '';
+    try {
+      const res = await fetch('/api/v1/route/', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({start, finish})
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('error').textContent = data.error || 'API Error';
+        return;
+      }
+      const coords = data.route_geometry.coordinates;
+      clearRouteLayers();
+      map.addSource('route', {type:'geojson', data:{type:'Feature', geometry:{type:'LineString', coordinates: coords}}});
+      map.addLayer({ id:'route-line', type:'line', source:'route', layout:{'line-join':'round','line-cap':'round'}, paint:{'line-color':'#ff7e5f','line-width':4}});
+      if (coords.length >= 2) {
+        const bounds = coords.reduce((b,c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+        map.fitBounds(bounds, {padding: 30});
+      }
+      const stopData = { type:'FeatureCollection', features: data.fuel_stops.map((s) => ({ type:'Feature', geometry:{type:'Point', coordinates:s.coordinates}, properties:{title:s.station_name, price:s.price_per_gallon, mile:s.miles_from_start}})) };
+      map.addSource('stop-points', {type:'geojson', data:stopData});
+      map.addLayer({id:'stop-markers', type:'circle', source:'stop-points', paint:{'circle-radius':6,'circle-color':'#d62828'}});
+      data.fuel_stops.forEach((s) => new mapboxgl.Marker({color:'#003f5c'}).setLngLat(s.coordinates).setPopup(new mapboxgl.Popup().setHTML(`<b>${s.station_name}</b><br>${s.address}<br>$${s.price_per_gallon}/gal`)).addTo(map));
+    } catch (err) {
+      document.getElementById('error').textContent = 'Request failed: ' + err.message;
+    }
+  });
+})();
+</script>
+</body>
+</html>
