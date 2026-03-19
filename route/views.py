@@ -1,10 +1,11 @@
 import logging
 import json
+import csv
 from html import escape
 from decimal import Decimal
 
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.utils.safestring import mark_safe
 from drf_spectacular.utils import extend_schema
@@ -46,6 +47,23 @@ def _create_route_log(*, category, source, message, start='', finish='', status_
         )
     except Exception:
         logger.exception('Failed to persist route log')
+
+
+def _filter_route_logs(params):
+    filter_serializer = RouteLogFilterSerializer(data=params)
+    filter_serializer.is_valid()
+
+    queryset = RouteLog.objects.all()
+    if filter_serializer.is_valid():
+        start_date = filter_serializer.validated_data.get('start_date')
+        end_date = filter_serializer.validated_data.get('end_date')
+
+        if start_date:
+            queryset = queryset.filter(created_at__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(created_at__date__lte=end_date)
+
+    return filter_serializer, queryset
 
 
 def _build_route_response(start, finish):
@@ -352,17 +370,55 @@ class RouteLogListAPIView(APIView):
         responses={200: RouteLogSerializer(many=True), 400: RouteLogSerializer},
     )
     def get(self, request):
-        filter_serializer = RouteLogFilterSerializer(data=request.query_params)
+        filter_serializer, queryset = _filter_route_logs(request.query_params)
+        download = request.query_params.get('download', '').strip().lower()
+        wants_html = 'text/html' in request.META.get('HTTP_ACCEPT', '') and not download
+
+        if wants_html:
+            download_query = request.GET.copy()
+            download_query.pop('download', None)
+            return render(
+                request._request,
+                'route_logs.html',
+                {
+                    'logs': queryset[:200] if filter_serializer.is_valid() else [],
+                    'filter_errors': filter_serializer.errors,
+                    'start_date': request.GET.get('start_date', ''),
+                    'end_date': request.GET.get('end_date', ''),
+                    'download_query': download_query.urlencode(),
+                },
+            )
+
         if not filter_serializer.is_valid():
             return Response({'error': 'Validation failed', 'details': filter_serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
-        queryset = RouteLog.objects.all()
-        start_date = filter_serializer.validated_data.get('start_date')
-        end_date = filter_serializer.validated_data.get('end_date')
+        serialized_logs = RouteLogSerializer(queryset, many=True).data
 
-        if start_date:
-            queryset = queryset.filter(created_at__date__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__date__lte=end_date)
+        if download == 'json':
+            response = HttpResponse(
+                json.dumps(serialized_logs, indent=2),
+                content_type='application/json',
+            )
+            response['Content-Disposition'] = 'attachment; filename="route_logs.json"'
+            return response
 
-        return Response(RouteLogSerializer(queryset, many=True).data)
+        if download == 'csv':
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = 'attachment; filename="route_logs.csv"'
+            writer = csv.writer(response)
+            writer.writerow(['id', 'category', 'source', 'message', 'start', 'finish', 'status_code', 'details', 'created_at'])
+            for item in serialized_logs:
+                writer.writerow([
+                    item['id'],
+                    item['category'],
+                    item['source'],
+                    item['message'],
+                    item['start'],
+                    item['finish'],
+                    item['status_code'],
+                    json.dumps(item['details']),
+                    item['created_at'],
+                ])
+            return response
+
+        return Response(serialized_logs)

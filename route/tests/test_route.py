@@ -249,3 +249,39 @@ def test_route_api_logs_validation_errors():
     assert log_entry.category == 'error'
     assert log_entry.source == 'route_api'
     assert log_entry.message == 'Validation failed'
+
+
+@pytest.mark.django_db
+def test_logs_endpoint_can_download_csv():
+    RouteLog.objects.create(
+        category='info',
+        source='manual',
+        message='CSV export test',
+        start_location='Chicago, IL',
+        finish_location='Denver, CO',
+        status_code=200,
+        details={'ok': True},
+    )
+
+    client = APIClient()
+    response = client.get('/api/v1/route/logs/?download=csv')
+
+    assert response.status_code == 200
+    assert response['Content-Type'].startswith('text/csv')
+    assert 'attachment; filename="route_logs.csv"' == response['Content-Disposition']
+    assert 'CSV export test' in response.content.decode('utf-8')
+
+
+@pytest.mark.django_db
+def test_logs_endpoint_renders_download_options_in_browser():
+    client = APIClient()
+    response = client.get(
+        '/api/v1/route/logs/?start_date=2026-03-01&end_date=2026-03-31',
+        HTTP_ACCEPT='text/html',
+    )
+
+    assert response.status_code == 200
+    content = response.content.decode('utf-8')
+    assert 'Download CSV' in content
+    assert 'Download JSON' in content
+    assert 'start_date=2026-03-01&amp;end_date=2026-03-31&amp;download=csv' in content

@@ -1,59 +1,127 @@
-# Fuel Route API
+# Fuel Route Optimizer
 
-Production-ready Django API for optimizing fuel stops along US driving routes.
+Backend assessment project built with Django and Django REST Framework. The service accepts a US start and finish location, gets a driving route from Mapbox, matches fuel price data near that route, and returns a cost-aware refueling plan.
+
+## Project Summary
+
+This implementation focuses on three things:
+
+- Producing a usable route response with estimated fuel cost and recommended stops
+- Keeping third-party API usage low through persistent JSON caching
+- Giving reviewers a simple way to inspect results through Swagger, a browser map view, and downloadable route logs
+
+## What The App Does
+
+- `POST /api/v1/route/` computes a route and optimized fuel stop plan
+- `GET /api/v1/route/map/` renders a browser-friendly preview of the same route
+- `GET /api/v1/route/logs/` lists stored route/search/error logs and supports JSON or CSV download
+- `POST /api/v1/route/logs/create/` creates a manual log entry
+- `GET /api/v1/route/health/` returns a simple health response
+- `GET /api/docs/` exposes the Swagger UI
+
+## Technical Approach
+
+### 1. Input validation
+
+The API requires `start` and `finish` in a lightweight US format such as `Chicago, IL`.
+
+Validation rejects:
+
+- Blank inputs
+- Identical start and finish
+- Values that do not resemble `City, ST`
+
+### 2. Geocoding and routing
+
+The app uses Mapbox for:
+
+- Forward geocoding of the start and finish locations
+- Driving directions between those coordinates
+
+To reduce repeated external calls, the app persists:
+
+- `data/geocode_cache.json`
+- `data/route_cache.json`
+
+If the same request is repeated, cached results are reused instead of calling Mapbox again.
+
+### 3. Fuel price loading
+
+The provided assessment CSV does not contain station latitude/longitude, so the app resolves fuel data by city/state centroid.
+
+Flow:
+
+- Read the assessment CSV
+- Resolve each unique `city,state` to coordinates
+- Save those coordinates into `data/city_centroids.json`
+- Load station rows into memory and keep the cheapest entry per city/state for optimization
+
+This keeps the runtime matching simple and deterministic for the assessment dataset.
+
+### 4. Stop optimization
+
+The optimizer:
+
+- Samples waypoints along the route
+- Builds a corridor around the route
+- Keeps only stations near that corridor
+- Chooses stops with a greedy cost-minimizing strategy
+
+Fueling assumptions from settings:
+
+- Vehicle range: `500` miles
+- Fuel economy: `10` MPG
+- Tank capacity: `50` gallons
+- Route corridor: `5` miles
+- Waypoint interval: `25` miles
+
+Policy:
+
+- The trip starts with a full tank
+- If a cheaper station is reachable ahead, buy only enough fuel to reach it
+- Otherwise, buy enough fuel to go as far as possible toward the destination
+
+## Architecture Notes
+
+Key modules:
+
+- [route/views.py](/home/khan/Desktop/backend-assessment/route/views.py) handles API endpoints, HTML views, and route logging
+- [route/serializers.py](/home/khan/Desktop/backend-assessment/route/serializers.py) validates request/filter payloads and shapes responses
+- [route/services/geocoding.py](/home/khan/Desktop/backend-assessment/route/services/geocoding.py) manages Mapbox geocoding plus persistent cache
+- [route/services/routing.py](/home/khan/Desktop/backend-assessment/route/services/routing.py) fetches and caches route geometry
+- [route/services/fuel_loader.py](/home/khan/Desktop/backend-assessment/route/services/fuel_loader.py) loads the fuel dataset and city centroid cache
+- [route/services/optimizer.py](/home/khan/Desktop/backend-assessment/route/services/optimizer.py) computes the recommended stop sequence
+- [route/models.py](/home/khan/Desktop/backend-assessment/route/models.py) stores search/error/manual log history
 
 ## Setup
 
-1. Clone repo and create virtual environment:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-2. Copy env file:
-   ```bash
-   cp .env.example .env
-   ```
-3. Set your Mapbox token in `.env`:
-   ```
-   MAPBOX_TOKEN=pk.your_mapbox_token
-   SECRET_KEY=unsafe-secret-key
-   ```
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
 
-## Mapbox Token
+Populate `.env` with at least:
 
-1. Sign up at https://account.mapbox.com/
-2. Create an access token from your account.
-3. Add to `.env` as `MAPBOX_TOKEN`.
+```env
+SECRET_KEY=unsafe-secret-key
+MAPBOX_TOKEN=pk.your_mapbox_token
+DEBUG=True
+```
 
-## Fuel price data (required for good results)
+## Build Fuel Coordinate Cache
 
-The provided `fuel-prices-for-be-assessment.csv` does not include lat/lon, so the app uses a cached lookup of city/state centroids.
-
-Build the cache once (writes `data/city_centroids.json`):
+Run this once before using the optimizer with the assessment CSV:
 
 ```bash
 source .venv/bin/activate
 python manage.py build_city_cache
 ```
 
-This command:
+It writes `data/city_centroids.json`, which is then reused at runtime.
 
-- Loads the CSV of fuel prices.
-- Resolves each station’s `city, state` to a coordinate (using Mapbox once per unique city/state).
-- Writes `data/city_centroids.json`, which is then used at runtime to build an in-memory list of stations with coordinates.
-
-At request time the optimizer:
-
-- Takes the route geometry from Mapbox Directions.
-- Builds a narrow corridor (default 5 miles) around the route.
-- Filters the station list to those within that corridor.
-- Chooses cost-effective fuel stops subject to:
-  - Max range: 500 miles
-  - MPG: 10
-  - Tank capacity: 50 gallons
-
-## Run
+## Run Locally
 
 ```bash
 source .venv/bin/activate
@@ -61,17 +129,20 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Swagger UI: http://127.0.0.1:8000/api/docs/
+Useful URLs:
 
-## API
+- Swagger UI: `http://127.0.0.1:8000/api/docs/`
+- Route API: `http://127.0.0.1:8000/api/v1/route/`
+- Map preview: `http://127.0.0.1:8000/api/v1/route/map/`
+- Logs/report view: `http://127.0.0.1:8000/api/v1/route/logs/`
+
+## API Examples
 
 ### Route optimization
 
-**Endpoint**
+`POST /api/v1/route/`
 
-- `POST /api/v1/route/`
-
-**Request body**
+Request:
 
 ```json
 {
@@ -80,45 +151,94 @@ Swagger UI: http://127.0.0.1:8000/api/docs/
 }
 ```
 
-- Both `start` and `finish` must be **US city + state**, e.g. `"Chicago, IL"`.
-- The API rejects:
-  - Blank values
-  - Identical start/finish
-  - Inputs that do not look like `City, ST` (2-letter state).
+Response fields include:
 
-**Behavior**
-
-- Geocodes start and finish using Mapbox.
-- Fetches a driving route using Mapbox Directions.
-- Uses the supplied fuel price data to recommend cost-effective fuel stops, assuming:
-  - Vehicle range: 500 miles
-  - Fuel economy: 10 miles per gallon
-  - Tank capacity: 50 gallons
-- Results are cached on disk so **repeated requests for the same route do not hit Mapbox again**, keeping usage within free-tier limits.
-
-**Example success response fields**
-
-- `start`, `finish` details
+- `start`
+- `finish`
 - `total_distance_miles`
 - `total_fuel_gallons`
 - `total_fuel_cost_usd`
-- `fuel_stops` list
-- `route_geometry` GeoJSON
+- `fuel_stops`
+- `route_geometry`
 
-**Error responses**
+Typical error responses:
 
-- `400 Bad Request` – validation or routing/optimizer issues:
-  - `{"error": "Validation failed", "details": {...}}`
-  - `{"error": "Invalid or unsupported route", "details": {"message": ["No fuel price data available along the route"]}}`
-- `502 Bad Gateway` – Mapbox is unreachable or times out:
-  - `{"error": "Upstream mapping service temporarily unavailable", "details": {"message": ["Mapbox ..."]}}`
-- `500 Internal Server Error` – unexpected issues on the server.
+- `400` for validation errors or infeasible routes
+- `502` when Mapbox is unavailable
+- `500` for unexpected server errors
 
 ### Map preview
 
-- `GET /api/v1/route/map/?start=New+York,+NY&finish=Los+Angeles,+CA`
-- Renders an HTML page that:
-  - Calls the same internal logic as the API to compute the route and fuel stops.
-  - Shows a simple SVG preview of the route and stop locations.
+`GET /api/v1/route/map/?start=New+York,+NY&finish=Los+Angeles,+CA`
 
-This is primarily for evaluators to **visually inspect** a route produced by the API.
+This page renders:
+
+- The same route computation used by the API
+- A Mapbox-backed browser view
+- An SVG fallback/summary preview
+- Validation or upstream error messages when applicable
+
+### Logs and report endpoints
+
+`GET /api/v1/route/logs/`
+
+Supports:
+
+- JSON list response by default
+- HTML report view when the browser requests `text/html`
+- Date filters with `start_date` and `end_date`
+- File downloads with `?download=json` or `?download=csv`
+
+Manual log creation:
+
+`POST /api/v1/route/logs/create/`
+
+Example payload:
+
+```json
+{
+  "category": "info",
+  "source": "manual",
+  "message": "Reviewer opened dashboard",
+  "start": "Chicago, IL",
+  "finish": "Denver, CO",
+  "status_code": 200,
+  "details": {
+    "note": "manual log"
+  }
+}
+```
+
+## Testing
+
+The automated tests cover:
+
+- Request validation rules
+- Optimizer behavior and infeasible-route handling
+- Persistent cache behavior for geocoding and routing
+- Route API happy path with mocked upstream services
+- Map validation rendering
+- Route log creation, filtering, and CSV download behavior
+
+Run:
+
+```bash
+source .venv/bin/activate
+pytest
+```
+
+## Tradeoffs And Limitations
+
+- Fuel station coordinates are approximated from city/state centroids, not true station coordinates
+- The optimizer uses a pragmatic greedy strategy rather than a global optimal search
+- Location validation is intentionally lightweight and US-focused
+- A real production version would likely use a stronger datastore and richer observability than SQLite plus JSON caches
+
+## Deliverable Notes
+
+For assessment purposes, this repo includes:
+
+- A documented REST API
+- A visual route preview for reviewers
+- Persistent caching to stay within free-tier API limits
+- A lightweight reporting surface through route logs and CSV/JSON export
