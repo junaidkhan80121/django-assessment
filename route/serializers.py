@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from .models import RouteLog
+
 
 class RouteRequestSerializer(serializers.Serializer):
     start = serializers.CharField(
@@ -77,3 +79,33 @@ class RouteResponseSerializer(serializers.Serializer):
     total_fuel_cost_usd = serializers.DecimalField(max_digits=12, decimal_places=2, help_text='Total estimated fuel cost.')
     fuel_stops = FuelStopSerializer(many=True, help_text='Ordered list of recommended fuel stops.')
     route_geometry = serializers.DictField(help_text='GeoJSON route geometry object.')
+
+
+class RouteLogCreateSerializer(serializers.ModelSerializer):
+    start = serializers.CharField(source='start_location', required=False, allow_blank=True)
+    finish = serializers.CharField(source='finish_location', required=False, allow_blank=True)
+
+    class Meta:
+        model = RouteLog
+        fields = ['category', 'source', 'message', 'start', 'finish', 'status_code', 'details']
+
+
+class RouteLogSerializer(serializers.ModelSerializer):
+    start = serializers.CharField(source='start_location')
+    finish = serializers.CharField(source='finish_location')
+
+    class Meta:
+        model = RouteLog
+        fields = ['id', 'category', 'source', 'message', 'start', 'finish', 'status_code', 'details', 'created_at']
+
+
+class RouteLogFilterSerializer(serializers.Serializer):
+    start_date = serializers.DateField(required=False)
+    end_date = serializers.DateField(required=False)
+
+    def validate(self, attrs):
+        start_date = attrs.get('start_date')
+        end_date = attrs.get('end_date')
+        if start_date and end_date and start_date > end_date:
+            raise serializers.ValidationError({'end_date': ['end_date must be on or after start_date.']})
+        return attrs

@@ -12,7 +12,14 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .serializers import RouteRequestSerializer, RouteResponseSerializer
+from .models import RouteLog
+from .serializers import (
+    RouteLogCreateSerializer,
+    RouteLogFilterSerializer,
+    RouteLogSerializer,
+    RouteRequestSerializer,
+    RouteResponseSerializer,
+)
 from .services.geocoding import geocode_place, MapboxUnavailableError
 from .services.optimizer import optimize_fuel_stops
 from .services.routing import get_route, MapboxUnavailableError as RoutingUnavailableError
@@ -24,6 +31,21 @@ def _validate_route_request(data):
     serializer = RouteRequestSerializer(data=data)
     serializer.is_valid()
     return serializer
+
+
+def _create_route_log(*, category, source, message, start='', finish='', status_code=None, details=None):
+    try:
+        RouteLog.objects.create(
+            category=category,
+            source=source,
+            message=message,
+            start_location=start or '',
+            finish_location=finish or '',
+            status_code=status_code,
+            details=details or {},
+        )
+    except Exception:
+        logger.exception('Failed to persist route log')
 
 
 def _build_route_response(start, finish):
@@ -135,19 +157,66 @@ def map_view(request):
         if not serializer.is_valid():
             map_error = 'Validation failed'
             map_error_details = serializer.errors
+            _create_route_log(
+                category=RouteLog.CATEGORY_ERROR,
+                source=RouteLog.SOURCE_MAP_VIEW,
+                message='Validation failed',
+                start=start,
+                finish=finish,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                details=serializer.errors,
+            )
         else:
             start = serializer.validated_data['start']
             finish = serializer.validated_data['finish']
             try:
                 route_payload = _build_route_response(start, finish)
+                _create_route_log(
+                    category=RouteLog.CATEGORY_SEARCH,
+                    source=RouteLog.SOURCE_MAP_VIEW,
+                    message='Route computed successfully',
+                    start=start,
+                    finish=finish,
+                    status_code=status.HTTP_200_OK,
+                    details={
+                        'fuel_stop_count': len(route_payload.get('fuel_stops', [])),
+                        'total_distance_miles': route_payload.get('total_distance_miles'),
+                    },
+                )
             except (MapboxUnavailableError, RoutingUnavailableError) as exc:
                 logger.error('Mapbox unavailable while rendering map page: %s', exc)
                 map_error = str(exc)
+                _create_route_log(
+                    category=RouteLog.CATEGORY_ERROR,
+                    source=RouteLog.SOURCE_MAP_VIEW,
+                    message='Upstream mapping service temporarily unavailable',
+                    start=start,
+                    finish=finish,
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    details={'message': [str(exc)]},
+                )
             except ValueError as exc:
                 map_error = str(exc)
+                _create_route_log(
+                    category=RouteLog.CATEGORY_ERROR,
+                    source=RouteLog.SOURCE_MAP_VIEW,
+                    message='Invalid or unsupported route',
+                    start=start,
+                    finish=finish,
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    details={'message': [str(exc)]},
+                )
             except Exception:
                 logger.exception('Unexpected error in map view')
                 map_error = 'Internal server error'
+                _create_route_log(
+                    category=RouteLog.CATEGORY_ERROR,
+                    source=RouteLog.SOURCE_MAP_VIEW,
+                    message='Internal server error',
+                    start=start,
+                    finish=finish,
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
     return render(
         request,
@@ -183,16 +252,46 @@ class RouteAPIView(APIView):
     def post(self, request):
         serializer = _validate_route_request(request.data)
         if not serializer.is_valid():
+            _create_route_log(
+                category=RouteLog.CATEGORY_ERROR,
+                source=RouteLog.SOURCE_ROUTE_API,
+                message='Validation failed',
+                start=str(request.data.get('start', '')).strip(),
+                finish=str(request.data.get('finish', '')).strip(),
+                status_code=status.HTTP_400_BAD_REQUEST,
+                details=serializer.errors,
+            )
             return Response({'error': 'Validation failed', 'details': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
         start = serializer.validated_data['start']
         finish = serializer.validated_data['finish']
 
         try:
             response = _build_route_response(start, finish)
+            _create_route_log(
+                category=RouteLog.CATEGORY_SEARCH,
+                source=RouteLog.SOURCE_ROUTE_API,
+                message='Route computed successfully',
+                start=start,
+                finish=finish,
+                status_code=status.HTTP_200_OK,
+                details={
+                    'fuel_stop_count': len(response.get('fuel_stops', [])),
+                    'total_distance_miles': response.get('total_distance_miles'),
+                },
+            )
             out = RouteResponseSerializer(response)
             return Response(out.data)
         except (MapboxUnavailableError, RoutingUnavailableError) as exc:
             logger.error('Mapbox unavailable: %s', exc)
+            _create_route_log(
+                category=RouteLog.CATEGORY_ERROR,
+                source=RouteLog.SOURCE_ROUTE_API,
+                message='Upstream mapping service temporarily unavailable',
+                start=start,
+                finish=finish,
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                details={'message': [str(exc)]},
+            )
             return Response(
                 {
                     'error': 'Upstream mapping service temporarily unavailable',
@@ -201,6 +300,15 @@ class RouteAPIView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         except ValueError as exc:
+            _create_route_log(
+                category=RouteLog.CATEGORY_ERROR,
+                source=RouteLog.SOURCE_ROUTE_API,
+                message='Invalid or unsupported route',
+                start=start,
+                finish=finish,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                details={'message': [str(exc)]},
+            )
             return Response(
                 {
                     'error': 'Invalid or unsupported route',
@@ -210,4 +318,51 @@ class RouteAPIView(APIView):
             )
         except Exception as exc:
             logger.exception('Unexpected error in route API')
+            _create_route_log(
+                category=RouteLog.CATEGORY_ERROR,
+                source=RouteLog.SOURCE_ROUTE_API,
+                message='Internal server error',
+                start=start,
+                finish=finish,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
             return Response({'error': 'Internal server error', 'details': {}}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RouteLogCreateAPIView(APIView):
+    @extend_schema(
+        summary='Create a route log entry',
+        description='Store a manual log entry in the database.',
+        request=RouteLogCreateSerializer,
+        responses={201: RouteLogSerializer, 400: RouteLogSerializer},
+    )
+    def post(self, request):
+        serializer = RouteLogCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({'error': 'Validation failed', 'details': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        log_entry = serializer.save()
+        return Response(RouteLogSerializer(log_entry).data, status=status.HTTP_201_CREATED)
+
+
+class RouteLogListAPIView(APIView):
+    @extend_schema(
+        summary='List route logs',
+        description='Return stored logs with optional start_date and end_date filters in YYYY-MM-DD format.',
+        responses={200: RouteLogSerializer(many=True), 400: RouteLogSerializer},
+    )
+    def get(self, request):
+        filter_serializer = RouteLogFilterSerializer(data=request.query_params)
+        if not filter_serializer.is_valid():
+            return Response({'error': 'Validation failed', 'details': filter_serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = RouteLog.objects.all()
+        start_date = filter_serializer.validated_data.get('start_date')
+        end_date = filter_serializer.validated_data.get('end_date')
+
+        if start_date:
+            queryset = queryset.filter(created_at__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(created_at__date__lte=end_date)
+
+        return Response(RouteLogSerializer(queryset, many=True).data)

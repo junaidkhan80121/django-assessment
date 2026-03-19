@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 import pytest
-from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
+from route.models import RouteLog
 from route.serializers import RouteRequestSerializer
 from route.services import geocoding, routing
 from route.services.optimizer import optimize_fuel_stops
@@ -178,3 +181,71 @@ def test_map_view_shows_same_validation_messages():
     assert 'Validation failed' in content
     assert 'start: Start should be a US city and state, e.g. &quot;Chicago, IL&quot;.' in content
     assert 'finish: Finish should be a US city and state, e.g. &quot;Denver, CO&quot;.' in content
+
+
+@pytest.mark.django_db
+def test_create_log_endpoint():
+    client = APIClient()
+
+    response = client.post(
+        '/api/v1/route/logs/create/',
+        {
+            'category': 'info',
+            'source': 'manual',
+            'message': 'Reviewer opened dashboard',
+            'start': 'Chicago, IL',
+            'finish': 'Denver, CO',
+            'status_code': 200,
+            'details': {'note': 'manual log'},
+        },
+        format='json',
+    )
+
+    assert response.status_code == 201
+    assert response.data['message'] == 'Reviewer opened dashboard'
+    assert RouteLog.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_list_logs_with_date_filters():
+    today = timezone.now()
+    old_date = today - timedelta(days=5)
+
+    old_log = RouteLog.objects.create(
+        category='search',
+        source='route_api',
+        message='Old route',
+        start_location='New York, NY',
+        finish_location='Boston, MA',
+        status_code=200,
+    )
+    RouteLog.objects.filter(pk=old_log.pk).update(created_at=old_date)
+
+    RouteLog.objects.create(
+        category='error',
+        source='route_api',
+        message='Recent error',
+        start_location='Chicago, IL',
+        finish_location='Denver, CO',
+        status_code=400,
+    )
+
+    client = APIClient()
+    response = client.get(f'/api/v1/route/logs/?start_date={today.date().isoformat()}')
+
+    assert response.status_code == 200
+    assert len(response.data) == 1
+    assert response.data[0]['message'] == 'Recent error'
+
+
+@pytest.mark.django_db
+def test_route_api_logs_validation_errors():
+    client = APIClient()
+
+    response = client.post('/api/v1/route/', {'start': 'Chicago', 'finish': 'Denver'}, format='json')
+
+    assert response.status_code == 400
+    log_entry = RouteLog.objects.get()
+    assert log_entry.category == 'error'
+    assert log_entry.source == 'route_api'
+    assert log_entry.message == 'Validation failed'
